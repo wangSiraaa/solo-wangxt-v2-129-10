@@ -48,6 +48,21 @@
 提示、一格宫色或一支温度计），`EditorState.revalidate()` 立即把结论复位为
 "未检查"，必须重新运行检查。`src/lib/state.test.ts` 覆盖了这一规则。
 
+## 作答预览：像学生一样试做，不碰题稿
+
+作者发布前可以进入**作答预览**模式（`src/lib/play.ts` + `PlayPanel.svelte`），
+从当前题面生成一块**独立作答盘**，以学生视角试做：
+
+- **填数 / 清空 / 标记冲突**：点选空格后填数（提示格不可改），行、列、宫、
+  温度计规则即时反馈——例如水银柱倒挂会立刻点名
+  `温度计 k：R1C1（5）必须小于 R1C2（3）`。
+- **提交判定有门槛**：只有题稿已有**且指纹有效**的**唯一解**结论，才允许判定
+  "完整正确"；否则一律提示需要先完成检查。题面改动后，旧答案与旧作答都
+  不能被当作新题的正确结果。
+- **严格隔离**：学生填数只动作答盘，绝不修改题面或旧检查结论；作答进度存到
+  IndexedDB 独立的 `plays` 库（以题面指纹为主键），与作者草稿（`drafts` 库）
+  完全分离；退出模式不会把作答回写成提示，作答模式下也不会绘制作者答案层。
+
 ## 导出题面不泄露答案层
 
 - IndexedDB 草稿（`DraftRecord`）保存作者私有数据：题面 + 最近一次检查结论（可能
@@ -87,7 +102,7 @@ node scripts/gen-samples.mjs   # 生成不规则宫、最小化提示，双重 c
 ```bash
 npm install        # 会自动把 z3 的 wasm 产物复制到 public/vendor
 npm run dev        # 开发服务器（已带 COOP/COEP 头）
-npm test           # 21 个单测（含 Z3 对三类样例的判定）
+npm test           # 43 个单测（含 Z3 对三类样例的判定、作答预览的隔离与判定规则）
 npm run check      # svelte-check 类型检查
 npm run build      # 产出 dist/
 node scripts/serve.mjs dist   # 以 COOP/COEP 头本地预览
@@ -105,12 +120,13 @@ node scripts/serve.mjs dist   # 以 COOP/COEP 头本地预览
 ```
 src/lib/puzzle.ts        # 领域模型 + 结构校验 + 导入导出
 src/lib/solver.ts        # Bool CNF 编码、addAndTrack 标注、两次 check、矛盾核
+src/lib/play.ts          # 作答预览：合并盘、行/列/宫/温度计即时反馈、提交判定
 src/lib/z3-init.ts       # 浏览器(全局 initZ3)/Node 双入口初始化
 src/lib/samples.ts       # 三类样例
 src/lib/sample-data.ts   # 生成脚本固化的数据（无答案层）
-src/lib/storage.ts       # IndexedDB 题稿
-src/lib/state.svelte.ts  # 编辑器状态、指纹失效
-src/components/*         # Canvas / 工具栏 / 检查面板 / 草稿 / 导入导出
+src/lib/storage.ts       # IndexedDB：drafts（作者题稿）+ plays（作答进度，按题面指纹归档）
+src/lib/state.svelte.ts  # 编辑器状态、指纹失效、作答预览模式
+src/components/*         # Canvas / 工具栏 / 检查面板 / 作答预览 / 草稿 / 导入导出
 scripts/gen-regions.mjs  # 不规则宫生成
 scripts/gen-samples.mjs  # 样例生成 + 双重 check 验证
 scripts/copy-z3.mjs      # 复制 wasm 产物

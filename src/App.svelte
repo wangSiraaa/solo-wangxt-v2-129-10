@@ -5,6 +5,7 @@
   import AnalysisPanel from './components/AnalysisPanel.svelte';
   import DraftsPanel from './components/DraftsPanel.svelte';
   import ExportPanel from './components/ExportPanel.svelte';
+  import PlayPanel from './components/PlayPanel.svelte';
   import { editor } from './lib/state.svelte';
   import { blankPuzzle } from './lib/puzzle';
   import { multipleSample, standardSample, unsatSample } from './lib/samples';
@@ -21,7 +22,10 @@
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.key >= '1' && e.key <= '9') editor.pressDigit(Number(e.key));
     if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') editor.pressDigit(0);
-    if (e.key === 'Enter' && (editor.tool === 'thermo-extend')) editor.finishThermo();
+    if (e.key === 'Enter') {
+      if (editor.mode === 'play') editor.submitPlay();
+      else if (editor.tool === 'thermo-extend') editor.finishThermo();
+    }
   }
 
   function loadSample(kind: 'standard' | 'unsat' | 'multiple' | 'blank') {
@@ -49,10 +53,16 @@
       <SudokuCanvas />
     </section>
     <aside class="side">
-      <Toolbar />
-      <AnalysisPanel />
-      <DraftsPanel />
-      <ExportPanel />
+      {#if editor.mode === 'play'}
+        <!-- 作答预览：只暴露作答面板，作者的编辑/检查/答案层面板全部收起 -->
+        <PlayPanel />
+      {:else}
+        <Toolbar />
+        <AnalysisPanel />
+        <PlayPanel />
+        <DraftsPanel />
+        <ExportPanel />
+      {/if}
     </aside>
   </div>
 

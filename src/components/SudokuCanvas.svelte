@@ -33,6 +33,10 @@
     void editor.showSolution;
     void editor.analysis;
     void editor.selectedCell;
+    void editor.mode;
+    void editor.playEntries;
+    void editor.playConflicts;
+    void editor.playGrade;
     void hover;
     void dpr;
     return 1;
@@ -63,11 +67,29 @@
       ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
     }
 
-    // 2) 高亮格（结构错误 / 矛盾核）
-    ctx.fillStyle = 'rgba(220, 38, 38, 0.22)';
-    editor.highlightCells.forEach((i) => {
-      ctx.fillRect(colOf(i) * CELL, rowOf(i) * CELL, CELL, CELL);
-    });
+    // 2) 高亮格：编辑模式画结构错误/矛盾核；作答模式画作答冲突与判错格
+    if (editor.mode === 'play') {
+      const bad = new Set<number>();
+      editor.playConflicts.forEach((c) => c.cells.forEach((i) => bad.add(i)));
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.22)';
+      bad.forEach((i) => {
+        ctx.fillRect(colOf(i) * CELL, rowOf(i) * CELL, CELL, CELL);
+      });
+      // 提交判定为不符时，与唯一解不一致的格画红框
+      const grade = editor.playGrade;
+      if (grade?.kind === 'incorrect') {
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2.5;
+        grade.wrongCells.forEach((i) => {
+          ctx.strokeRect(colOf(i) * CELL + 4, rowOf(i) * CELL + 4, CELL - 8, CELL - 8);
+        });
+      }
+    } else {
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.22)';
+      editor.highlightCells.forEach((i) => {
+        ctx.fillRect(colOf(i) * CELL, rowOf(i) * CELL, CELL, CELL);
+      });
+    }
 
     // 悬停
     if (hover !== null) {
@@ -147,8 +169,9 @@
       }
     }
 
-    // 6) 解层（仅作者本地查看，不参与导出）
-    if (editor.showSolution && editor.analysis.result?.solution) {
+    // 6) 解层（仅编辑模式的作者本地查看，不参与导出；
+    //    作答预览下绝不绘制，避免答案层泄漏给学生视角）
+    if (editor.mode !== 'play' && editor.showSolution && editor.analysis.result?.solution) {
       const sol = editor.analysis.result.solution;
       ctx.font = `500 ${CELL * 0.42}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillStyle = '#2563eb';
@@ -156,6 +179,20 @@
         if (p.givens[i]) continue;
         const [cx, cy] = center(i);
         ctx.fillText(String(sol[i]), cx, cy + 1);
+      }
+    }
+
+    // 7) 作答层（学生填数；与题面提示、作者答案层都分离，仅存于作答盘）
+    if (editor.mode === 'play') {
+      ctx.font = `500 ${CELL * 0.56}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillStyle = '#047857';
+      for (let i = 0; i < CELL_COUNT; i++) {
+        if (p.givens[i]) continue;
+        const v = editor.playEntries[i];
+        if (v >= 1 && v <= 9) {
+          const [cx, cy] = center(i);
+          ctx.fillText(String(v), cx, cy + 1);
+        }
       }
     }
   }
@@ -193,8 +230,10 @@
   }
   function onMove(e: MouseEvent) {
     hover = eventCell(e);
-    // 宫区刷色支持拖动
-    if (painting && editor.tool === 'regions' && hover !== null) editor.onCellClick(hover);
+    // 宫区刷色支持拖动（仅编辑模式）
+    if (painting && editor.mode === 'edit' && editor.tool === 'regions' && hover !== null) {
+      editor.onCellClick(hover);
+    }
   }
   function onUp() {
     painting = false;

@@ -1,16 +1,28 @@
 // 全局应用状态（Svelte 5 runes）。
 import {
+  CELL_COUNT,
   clonePuzzle,
   puzzleFingerprint,
   validateStructure,
   type Puzzle,
   type StructuralIssue
 } from './puzzle';
+import {
+  blankEntries,
+  evaluatePlay,
+  gradePlay,
+  type PlayConflict,
+  type PlayGrade
+} from './play';
+import { loadPlay, playRecordFor, savePlay } from './storage';
 import type { SolveResult } from './solver';
 import { initZ3Api } from './z3-init';
 import type { Z3HighLevel } from 'z3-solver';
 
 export type Tool = 'givens' | 'regions' | 'thermo-start' | 'thermo-extend' | 'erase';
+
+/** edit=作者编辑；play=作答预览（学生视角试做，不碰题面与检查结论） */
+export type EditorMode = 'edit' | 'play';
 
 export interface AnalysisState {
   status: 'idle' | 'checking' | 'done';
@@ -41,6 +53,18 @@ export class EditorState {
   showSolution = $state<boolean>(false);
   /** 当前选中格（givens 工具下由数字键/数字盘写入） */
   selectedCell = $state<number | null>(null);
+  /** 当前模式：编辑 / 作答预览 */
+  mode = $state<EditorMode>('edit');
+  /** 学生作答盘：与题面提示严格分离，0 表示未填 */
+  playEntries = $state<number[]>(blankEntries());
+  /** 作答的即时冲突反馈（行/列/宫/温度计），仅作答模式下计算 */
+  playConflicts = $derived<PlayConflict[]>(
+    this.mode === 'play' && this.puzzle
+      ? evaluatePlay(this.puzzle as Puzzle, this.playEntries)
+      : []
+  );
+  /** 最近一次提交判定的结果 */
+  playGrade = $state<PlayGrade | null>(null);
 
   #analyzePuzzle: typeof import('./solver').analyzePuzzle | null = null;
 
@@ -48,6 +72,9 @@ export class EditorState {
     this.puzzle = puzzle;
     this.draftId = draftId;
     this.draftName = name;
+    this.mode = 'edit';
+    this.playEntries = blankEntries();
+    this.playGrade = null;
     this.revalidate();
     this.analysis = { status: 'idle', result: null, fingerprint: null, error: null };
   }
@@ -154,8 +181,13 @@ export class EditorState {
     if (this.activeThermo === index) this.activeThermo = null;
   }
 
-  /** 画布点击入口，由当前工具决定行为 */
+  /** 画布点击入口，由当前模式与工具决定行为 */
   onCellClick(cell: number) {
+    if (this.mode === 'play') {
+      // 作答预览：点击只选中格子，绝不改动题面
+      this.selectedCell = cell;
+      return;
+    }
     switch (this.tool) {
       case 'regions':
         this.paintRegion(cell);
@@ -179,10 +211,93 @@ export class EditorState {
   }
 
   pressDigit(d: number) {
+    if (this.mode === 'play') {
+      this.playPressDigit(d);
+      return;
+    }
     if (this.tool !== 'givens') return;
     if (this.selectedCell === null) return;
     if (d === 0) this.clearCell(this.selectedCell);
     else this.setGiven(this.selectedCell, d);
+  }
+
+  // -----------------------------------------------------------------
+  // 作答预览（学生视角试做）：作答盘与题面、检查结论严格分离
+  // -----------------------------------------------------------------
+
+  /** 进入作答预览：从当前题面生成独立作答盘；按题面指纹恢复历史作答 */
+  async enterPlay() {
+    if (this.mode === 'play') return;
+    if (this.activeThermo !== null) this.finishThermo();
+    this.mode = 'play';
+    this.playGrade = null;
+    this.selectedCell = null;
+    const fp = puzzleFingerprint(this.puzzle as Puzzle);
+    this.playEntries = blankEntries();
+    try {
+      const rec = await loadPlay(fp);
+      // 等待期间已退出作答模式或题面被改动时，丢弃迟到的读取
+      if (this.mode !== 'play' || puzzleFingerprint(this.puzzle as Puzzle) !== fp) return;
+      if (rec && rec.puzzleFingerprint === fp && rec.entries.length === CELL_COUNT) {
+        this.playEntries = rec.entries.map((v) =>
+          Number.isInteger(v) && v >= 1 && v <= 9 ? v : 0
+        );
+      }
+    } catch {
+      // 无 IndexedDB（如测试环境）时，作答仅保留在本次会话内
+    }
+  }
+
+  /** 退出作答预览：作答只留在独立的 plays 存储里，绝不回写题面提示 */
+  exitPlay() {
+    if (this.mode !== 'play') return;
+    this.mode = 'edit';
+    this.playGrade = null;
+    this.selectedCell = null;
+  }
+
+  /** 学生填数/清空：只动作答盘，绝不影响题面与检查结论 */
+  playSetCell(cell: number, digit: number) {
+    if (this.mode !== 'play') return;
+    if (cell < 0 || cell >= CELL_COUNT) return;
+    if ((this.puzzle as Puzzle).givens[cell] >= 1) return; // 提示格属于题面，不可改
+    const next = [...this.playEntries];
+    next[cell] = digit === 0 ? 0 : next[cell] === digit ? 0 : digit;
+    this.playEntries = next;
+    this.playGrade = null; // 任何作答变动都使上次提交判定失效
+    this.#persistPlay();
+  }
+
+  playPressDigit(d: number) {
+    if (this.selectedCell === null) return;
+    this.playSetCell(this.selectedCell, d);
+  }
+
+  /** 清空全部作答（不碰题面） */
+  clearPlay() {
+    if (this.mode !== 'play') return;
+    this.playEntries = blankEntries();
+    this.playGrade = null;
+    this.#persistPlay();
+  }
+
+  /** 提交作答：只有指纹有效的唯一解结论才允许判定完整正确 */
+  submitPlay() {
+    if (this.mode !== 'play') return;
+    this.playGrade = gradePlay(
+      this.puzzle as Puzzle,
+      this.playEntries,
+      this.analysis.result,
+      this.analysis.fingerprint
+    );
+  }
+
+  /** 作答进度写入独立的 plays 库（按题面指纹归档），与作者草稿分离 */
+  #persistPlay() {
+    if (typeof indexedDB === 'undefined') return;
+    savePlay(playRecordFor(this.puzzle as Puzzle, this.playEntries)).catch(() => {
+      // 存储不可用时静默降级：作答仍保留在内存中
+    });
   }
 
   async runCheck() {
