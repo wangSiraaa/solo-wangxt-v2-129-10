@@ -9,6 +9,7 @@
     type DraftSummary
   } from '../lib/storage';
   import { puzzleFingerprint } from '../lib/puzzle';
+  import { preview } from '../lib/preview.svelte';
 
   let drafts = $state<DraftSummary[]>([]);
   let message = $state('');
@@ -52,6 +53,7 @@
   async function open(id: string) {
     const rec = await loadDraft(id);
     if (!rec) return;
+    preview.abort(); // 题面切换：旧作答留在按指纹隔离的独立存储中
     editor.init(structuredClone(rec.puzzle), rec.id, rec.name);
     if (rec.lastCheck && rec.checkFingerprint === puzzleFingerprint(rec.puzzle)) {
       editor.analysis = { status: 'done', result: rec.lastCheck, fingerprint: rec.checkFingerprint, error: null };

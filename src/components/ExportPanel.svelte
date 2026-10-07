@@ -4,6 +4,7 @@
     exportPuzzle,
     importPuzzle
   } from '../lib/puzzle';
+  import { preview } from '../lib/preview.svelte';
 
   let message = $state('');
   let importOpen = $state(false);
@@ -35,6 +36,7 @@
     try {
       const data = JSON.parse(importText);
       const puzzle = importPuzzle(data);
+      preview.abort();
       editor.init(puzzle, null, '导入的题面');
       message = '导入成功：结构校验通过，可直接检查可解性';
       importOpen = false;

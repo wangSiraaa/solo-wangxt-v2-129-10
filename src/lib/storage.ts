@@ -6,11 +6,26 @@ import {
   type Puzzle,
   validateStructure
 } from './puzzle';
+import type { AnswerBoard } from './answer';
 import type { SolveResult } from './solver';
 
 const DB_NAME = 'thermo-jigsaw-studio';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'drafts';
+/**
+ * 作答进度独立存储：主键是"题面指纹"而不是草稿 id。
+ *  - 与作者草稿（drafts）物理隔离：填数永远不会写回题稿/答案层；
+ *  - 题面一改指纹即变，旧作答天然取不到，不可能被当成新题的结果。
+ */
+const ANSWER_STORE = 'answers';
+
+export interface AnswerRecord {
+  /** 主键：作答所基于的题面指纹（puzzleFingerprint） */
+  fingerprint: string;
+  updatedAt: number;
+  /** 学生填数（长度 81；提示格恒为 0） */
+  answers: AnswerBoard;
+}
 
 export interface DraftRecord {
   id: string;
@@ -37,6 +52,9 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(ANSWER_STORE)) {
+        db.createObjectStore(ANSWER_STORE, { keyPath: 'fingerprint' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -45,18 +63,16 @@ function openDb(): Promise<IDBDatabase> {
 
 function tx<T>(
   mode: IDBTransactionMode,
-  fn: (store: IDBObjectStore) => IDBRequest<T> | IDBRequest<T>[]
+  storeName: string,
+  fn: (store: IDBObjectStore) => IDBRequest<T>
 ): Promise<T> {
   return openDb().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
-        const t = db.transaction(STORE, mode);
-        const store = t.objectStore(STORE);
-        const reqs = fn(store);
-        t.oncomplete = () => {
-          const r = Array.isArray(reqs) ? reqs[0] : reqs;
-          resolve(r.result);
-        };
+        const t = db.transaction(storeName, mode);
+        const store = t.objectStore(storeName);
+        const req = fn(store);
+        t.oncomplete = () => resolve(req.result);
         t.onerror = () => reject(t.error);
         t.onabort = () => reject(t.error);
       })
@@ -66,18 +82,20 @@ function tx<T>(
 export async function saveDraft(rec: DraftRecord): Promise<void> {
   // 保存前做一次结构完整性校验，避免把坏数据写进库
   validateStructure(rec.puzzle);
-  await tx('readwrite', (store) => store.put(structuredClone(rec)) as IDBRequest);
+  await tx('readwrite', STORE, (store) =>
+    store.put(structuredClone(rec)) as IDBRequest
+  );
 }
 
 export async function loadDraft(id: string): Promise<DraftRecord | null> {
-  const rec = await tx<DraftRecord | undefined>('readonly', (store) =>
+  const rec = await tx<DraftRecord | undefined>('readonly', STORE, (store) =>
     store.get(id) as IDBRequest<DraftRecord | undefined>
   );
-  return rec ? (rec as DraftRecord) : null;
+  return rec ?? null;
 }
 
 export async function listDrafts(): Promise<DraftSummary[]> {
-  const all = await tx<DraftRecord[]>('readonly', (store) =>
+  const all = await tx<DraftRecord[]>('readonly', STORE, (store) =>
     store.getAll() as IDBRequest<DraftRecord[]>
   );
   return (all ?? [])
@@ -86,7 +104,7 @@ export async function listDrafts(): Promise<DraftSummary[]> {
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-  await tx('readwrite', (store) => store.delete(id) as IDBRequest);
+  await tx('readwrite', STORE, (store) => store.delete(id) as IDBRequest);
 }
 
 export function newDraftId(): string {
@@ -107,4 +125,35 @@ export function draftFromPuzzle(name: string, puzzle: Puzzle): DraftRecord {
     lastCheck: null,
     checkFingerprint: null
   };
+}
+
+// ---------------------------------------------------------------------------
+// 作答进度（独立于题稿；按题面指纹存取，绝不回写题面/答案层）
+// ---------------------------------------------------------------------------
+
+export async function loadAnswers(fingerprint: string): Promise<AnswerBoard | null> {
+  const rec = await tx<AnswerRecord | undefined>('readonly', ANSWER_STORE, (store) =>
+    store.get(fingerprint) as IDBRequest<AnswerRecord | undefined>
+  );
+  if (!rec || !Array.isArray(rec.answers) || rec.answers.length !== 81) return null;
+  // 只接受 0..9 的整数，避免脏数据污染作答盘
+  if (rec.answers.some((v) => !Number.isInteger(v) || v < 0 || v > 9)) return null;
+  return [...rec.answers];
+}
+
+export async function saveAnswers(fingerprint: string, answers: AnswerBoard): Promise<void> {
+  const rec: AnswerRecord = {
+    fingerprint,
+    updatedAt: Date.now(),
+    answers: [...answers]
+  };
+  await tx('readwrite', ANSWER_STORE, (store) =>
+    store.put(structuredClone(rec)) as IDBRequest
+  );
+}
+
+export async function clearAnswers(fingerprint: string): Promise<void> {
+  await tx('readwrite', ANSWER_STORE, (store) =>
+    store.delete(fingerprint) as IDBRequest
+  );
 }

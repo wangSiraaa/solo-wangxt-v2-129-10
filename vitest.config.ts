@@ -7,5 +7,8 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
     testTimeout: 120000
+  },
+  resolve: {
+    conditions: ['browser']
   }
 });

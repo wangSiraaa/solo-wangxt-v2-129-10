@@ -56,6 +56,25 @@
   （`kind: "puzzle"`），**不含** `solution / witness / lastCheck` 等任何答案层字段；
   有单测断言导出对象的键集合。
 
+## 作答预览（作者扮学生试做，不泄漏答案层）
+
+顶栏"作答预览"从**当前题面的深拷贝快照**生成独立作答盘（`src/lib/preview.svelte.ts`
++ `src/lib/answer.ts`）：
+
+- 提示格只读，学生只能在空格填数；蓝色为学生填数、黑色粗体为题面提示。
+- **即时反馈**：行 / 列 / 宫重复与温度计"自水银泡严格递增"冲突实时标红并列出
+  （温度计顺序错误会点名是第几支、哪两格）。
+- **提交判定有硬门禁**（`judgeSubmission`）：只有"题稿**已有**检查结论、结论
+  **指纹与当前题面一致**、verdict 为 **unique** 且唯一解在手"时才可能判完整正确；
+  未检查 / 检查中 / 指纹过期 / `multiple` / `unsat` / `unknown` 一律提示先完成检查，
+  绝不拿旧题的结论判新题。
+- **进度与草稿分开保存**：IndexedDB 升级到 v2，新增独立 `answers` store，
+  **以题面指纹为主键**。学生填数不经过任何编辑器变更方法，不改题面、不触发
+  `revalidate()`、不触碰旧检查；退出模式只保存作答、不回写任何提示。
+- 题面一改指纹即变：旧作答记录留在旧指纹下，新题进入时取不到，旧唯一解结论也因
+  指纹不一致被提交门禁拒绝。
+- 作答期间作者答案层开关被强制关闭，作答盘绘制路径从不读取 `solution`。
+
 ## 内置样例（均经 Z3 双重 check 验证）
 
 - **标准题**：真·不规则宫 + 2 支温度计 + 13 个提示 → `unique`。
@@ -87,7 +106,7 @@ node scripts/gen-samples.mjs   # 生成不规则宫、最小化提示，双重 c
 ```bash
 npm install        # 会自动把 z3 的 wasm 产物复制到 public/vendor
 npm run dev        # 开发服务器（已带 COOP/COEP 头）
-npm test           # 21 个单测（含 Z3 对三类样例的判定）
+npm test           # 单测（含 Z3 对三类样例的判定，以及作答预览的隔离/门禁测试）
 npm run check      # svelte-check 类型检查
 npm run build      # 产出 dist/
 node scripts/serve.mjs dist   # 以 COOP/COEP 头本地预览
@@ -103,16 +122,18 @@ node scripts/serve.mjs dist   # 以 COOP/COEP 头本地预览
 ## 目录
 
 ```
-src/lib/puzzle.ts        # 领域模型 + 结构校验 + 导入导出
-src/lib/solver.ts        # Bool CNF 编码、addAndTrack 标注、两次 check、矛盾核
-src/lib/z3-init.ts       # 浏览器(全局 initZ3)/Node 双入口初始化
-src/lib/samples.ts       # 三类样例
-src/lib/sample-data.ts   # 生成脚本固化的数据（无答案层）
-src/lib/storage.ts       # IndexedDB 题稿
-src/lib/state.svelte.ts  # 编辑器状态、指纹失效
-src/components/*         # Canvas / 工具栏 / 检查面板 / 草稿 / 导入导出
-scripts/gen-regions.mjs  # 不规则宫生成
-scripts/gen-samples.mjs  # 样例生成 + 双重 check 验证
-scripts/copy-z3.mjs      # 复制 wasm 产物
-scripts/serve.mjs        # 带 COOP/COEP 头的静态服务器
+src/lib/puzzle.ts          # 领域模型 + 结构校验 + 导入导出
+src/lib/answer.ts          # 作答盘：即时冲突（行/列/宫/温度计）+ 提交指纹门禁
+src/lib/solver.ts          # Bool CNF 编码、addAndTrack 标注、两次 check、矛盾核
+src/lib/z3-init.ts         # 浏览器(全局 initZ3)/Node 双入口初始化
+src/lib/samples.ts         # 三类样例
+src/lib/sample-data.ts     # 生成脚本固化的数据（无答案层）
+src/lib/storage.ts         # IndexedDB：题稿 drafts + 作答进度 answers（按指纹隔离）
+src/lib/state.svelte.ts    # 编辑器状态、指纹失效
+src/lib/preview.svelte.ts  # 作答预览状态：题面快照、不回写、独立持久化
+src/components/*           # Canvas / 工具栏 / 检查面板 / 草稿 / 导入导出 / 作答面板
+scripts/gen-regions.mjs    # 不规则宫生成
+scripts/gen-samples.mjs    # 样例生成 + 双重 check 验证
+scripts/copy-z3.mjs        # 复制 wasm 产物
+scripts/serve.mjs          # 带 COOP/COEP 头的静态服务器
 ```
